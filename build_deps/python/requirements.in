@@ -1,0 +1,22 @@
+#
+# test deps
+#
+-r requirements_test.txt
+
+#
+# build deps
+#
+lit>=17.0.6
+numpy>=1.24.0
+jax>=0.4.13
+jaxlib>=0.4.13
+
+#
+# runtime deps
+#
+scipy>=1.14.1
+
+# from flax_2b requirements.txt
+ml_dtypes>=0.5.0
+opt_einsum>=3.4.0
+etils[epath]>=1.11.0

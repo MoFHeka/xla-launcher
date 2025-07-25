@@ -1,0 +1,26 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load(
+    "@local_config_cuda//cuda:build_defs.bzl",
+    "if_cuda",
+)
+
+cc_library(
+    name = "xla_launcher_package_importer",
+    srcs = ["//xla_launcher:xla_launcher_package"],
+    hdrs = ["//xla_launcher:xla_launcher_package"],
+)
+
+cc_test(
+    name = "run_stablehlo_kernel_test",
+    srcs = ["run_stablehlo_kernel_test.cpp"],
+    copts = if_cuda(["-DGOOGLE_CUDA"]),
+    data = [
+        "//xla_launcher/test/adamw_kernel:generate_adamw_stablehlo_bin_file",
+    ],
+    deps = [
+        ":xla_launcher_package_importer",
+        "@bazel_tools//tools/cpp/runfiles",
+        "@com_google_googletest//:gtest_main",
+        "@dlpack_latest//:dlpack",
+    ] + if_cuda(["@local_config_cuda//cuda:cuda"]),
+)

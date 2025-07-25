@@ -1,0 +1,20 @@
+Language: Cpp
+BasedOnStyle: Google
+IncludeCategories:
+- Regex: '^<'
+  Priority: 1
+- Regex: '^"'
+  Priority: 2
+- Regex: '^<experimental/'
+  Priority: 3
+AlignAfterOpenBracket: AlwaysBreak
+BreakBeforeBinaryOperators: NonAssignment
+ConstructorInitializerIndentWidth: 2
+ContinuationIndentWidth: 2
+DerivePointerAlignment: true
+ExperimentalAutoDetectBinPacking: false
+IncludeBlocks: Preserve
+Standard: c++20
+TabWidth: 0
+TypenameMacros: []
+UseTab: Never

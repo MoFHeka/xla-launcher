@@ -1,0 +1,42 @@
+# Disable Bzlmod if needed
+common --noenable_bzlmod
+
+common --experimental_repo_remote_exec
+
+build --incompatible_enable_cc_toolchain_resolution
+build --repo_env USE_HERMETIC_CC_TOOLCHAIN=1
+
+# TODO: Migrate for https://github.com/bazelbuild/bazel/issues/7260
+build:clang_local --noincompatible_enable_cc_toolchain_resolution
+build:clang_local --repo_env USE_HERMETIC_CC_TOOLCHAIN=0
+
+# Load the TensorFlow bazelrc
+import %workspace%/tensorflow.bazelrc
+import %workspace%/warnings.bazelrc
+
+try-import %workspace%/xla_configure.bazelrc
+
+# Export libraries to the build directory
+build --experimental_cc_shared_library
+
+# Disable enabled-by-default TensorFlow features that we don't care about.
+build --define=no_aws_support=true
+build --define=no_hdfs_support=true
+build --define=no_hdfs_support=true
+build --define=no_kafka_support=true
+build --define=no_ignite_support=true
+
+build --define=grpc_no_ares=true
+
+# CPU optimization config for hardware compatibility
+# build --define=xnn_enable_avx512fp16=false
+# build --define=xnn_enable_avx512vnni=false
+# build --define=xnn_enable_avxvnni=false
+# build --define=xnn_enable_avxvnniint8=false
+# build --define=xnn_enable_avxvnniint16=false
+# build --define=xnn_enable_avx512amx=false
+
+# build --cxxopt="-g"
+
+# Build with cuda
+build --config=cuda

@@ -1,0 +1,10 @@
+# Python dependencies for XLA testing
+absl-py
+build
+flatbuffers
+mpmath>=1.3
+numpy>=2.2.0
+PyYAML>=6.0.2
+wheel
+rich>=13.9.5
+setuptools

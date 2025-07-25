@@ -1,0 +1,373 @@
+"""
+Build runtime library from XLA for using somewhere else
+"""
+
+load("@xla//xla/tsl/platform/default:build_config.bzl", "strict_cc_test")
+load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
+load("@local_config_rocm//rocm:build_defs.bzl", "if_rocm")
+load("@local_config_sycl//sycl:build_defs.bzl", "if_sycl_is_configured")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "runtime",
+    srcs = ["runtime.cpp"],
+    hdrs = ["runtime.hpp"],
+    deps = [
+        ":env",
+        ":pjrt_computation_client",
+        ":sys_util",
+        "@tsl//tsl/platform:stacktrace_handler",
+    ],
+)
+
+strict_cc_test(
+    name = "pjrt_computation_client_test",
+    timeout = "short",
+    srcs = ["pjrt_computation_client_test.cpp"],
+    deps = [
+        ":pjrt_computation_client",
+        "@xla//xla/tests:literal_test_util",
+    ],
+)
+
+cc_library(
+    name = "pjrt_computation_client",
+    srcs = [
+        "pjrt_computation_client.cpp",
+    ],
+    hdrs = [
+        "pjrt_computation_client.hpp",
+    ],
+    deps = [
+        ":computation_client",
+        ":operation_manager",
+        ":pjrt_registry",
+        ":xla_util",
+        "@com_google_absl//absl/status",
+        "@xla//xla:literal",
+        "@xla//xla:literal_util",
+        "@xla//xla:shape_util",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder:xla_computation",
+        "@xla//xla/tools:hlo_module_loader",
+    ],
+)
+
+cc_library(
+    name = "computation_client",
+    srcs = ["computation_client.cpp"],
+    hdrs = ["computation_client.hpp"],
+    deps = [
+        ":debug_macros",
+        ":stablehlo_helper",
+        ":tensor_source",
+        ":xla_util",
+        "//xla_launcher:device",
+        "@dlpack_latest//:dlpack",
+        "@xla//xla:literal",
+        "@xla//xla:literal_util",
+        "@xla//xla:shape_util",
+        "@xla//xla/hlo/builder:xla_computation",
+        "@xla//xla/hlo/ir:hlo",
+        "@xla//xla/pjrt:pjrt_c_api_client",
+        "@xla//xla/pjrt:pjrt_client",
+        "@xla//xla/pjrt/c:pjrt_c_api_gpu_extension_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
+        "@xla//xla/pjrt/c:pjrt_c_api_wrapper_impl",
+        "@xla//xla/pjrt/gpu:se_gpu_pjrt_client",
+        "@xla//xla/service:hlo_proto_cc",
+        "@xla//xla/tools:xla_compile_lib",
+        # GPU related
+        "@xla//xla/stream_executor/gpu:gpu_init",
+        # Load all HLO related IR dialects and passes
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllExtensions",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:register",
+        "@xla//xla/mlir_hlo:all_passes",
+        "@xla//xla/mlir_hlo:hlo_dialect_registration",
+        "@xla//xla/mlir_hlo:stablehlo_extension_passes",
+        "@xla//xla/mlir_hlo:transforms_gpu_passes",
+    ] + if_cuda([
+        "@xla//xla/stream_executor/cuda:all_runtime",
+    ]) + if_rocm([
+        "@xla//xla/tsl/util:determinism",
+        "@xla//xla/stream_executor/rocm:all_runtime",
+    ]) + if_sycl_is_configured([
+        "@xla//xla/stream_executor/sycl:all_runtime",
+    ]),
+)
+
+cc_library(
+    name = "pjrt_registry",
+    srcs = ["pjrt_registry.cpp"],
+    hdrs = ["pjrt_registry.hpp"],
+    copts = if_cuda(["-DGOOGLE_CUDA=1"]),
+    deps = [
+        ":debug_macros",
+        ":env",
+        ":env_hash",
+        ":profiler",
+        ":sys_util",
+        "//xla_launcher:device",
+        "@com_google_absl//absl/log:initialize",
+        "@xla//xla/pjrt:pjrt_c_api_client",
+        "@xla//xla/pjrt:tfrt_cpu_pjrt_client",
+        "@xla//xla/pjrt/distributed",
+        "@xla//xla/pjrt/gpu:gpu_helpers",
+        "@xla//xla/pjrt/gpu:se_gpu_pjrt_client",
+        "@xla//xla/service:gpu_plugin",
+        "@xla//xla/service/gpu:gpu_memory_space_assignment",
+    ],
+)
+
+# Profiler silently fails unless we link these backends
+cc_library(
+    name = "profiler_backends",
+    visibility = ["//visibility:private"],
+    deps = [
+        "@xla//xla/backends/profiler/cpu:host_tracer",
+        "@xla//xla/backends/profiler/cpu:metadata_collector",
+    ] + if_cuda([
+        "@xla//xla/backends/profiler/gpu:device_tracer",
+    ]),
+    alwayslink = True,
+)
+
+cc_library(
+    name = "profiler",
+    srcs = ["profiler.cpp"],
+    hdrs = ["profiler.hpp"],
+    deps = [
+        ":profiler_backends",
+        "@com_google_absl//absl/status",
+        "@xla//xla/backends/profiler/plugin:profiler_c_api_hdrs",
+        "@xla//xla/backends/profiler/plugin:plugin_tracer",
+        "@xla//xla/pjrt:status_casters",
+        "@xla//xla/pjrt/c:pjrt_c_api_profiler_extension_hdrs",
+        "@tsl//tsl/profiler/lib:profiler_factory",
+        "@tsl//tsl/profiler/lib:profiler_session",
+        "@tsl//tsl/profiler/lib:profiler_session_impl",
+        "@xla//xla/tsl/profiler/rpc:profiler_server_impl",
+        "@xla//xla/tsl/profiler/rpc/client:capture_profile",
+        "@com_google_absl//absl/container:flat_hash_map",
+
+        # TODO: We get missing symbol errors without these deps. Why aren't they
+        # included transitively from TensorFlow/TSL?
+        "@xla//xla/tsl/profiler/rpc/client:profiler_client",
+        "@tsl//tsl/profiler/lib:profiler_factory_impl",
+        "@tsl//tsl/profiler/protobuf:profiler_analysis_proto_cc_impl",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc_impl",
+        "@tsl//tsl/profiler/protobuf:profiler_service_proto_cc_impl",
+        "@tsl//tsl/profiler/protobuf:profiler_service_monitor_result_proto_cc_impl",
+    ],
+)
+
+cc_library(
+    name = "env",
+    hdrs = ["env.hpp"],
+)
+
+cc_library(
+    name = "env_hash",
+    srcs = ["xla_env_hash.cpp"],
+    hdrs = ["xla_env_hash.hpp"],
+    deps = [
+        ":sys_util",
+        ":xla_util",
+    ],
+)
+
+cc_library(
+    name = "operation_manager",
+    srcs = ["operation_manager.cpp"],
+    hdrs = ["operation_manager.hpp"],
+    deps = [
+        ":debug_macros",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "debug_macros",
+    hdrs = ["debug_macros.hpp"],
+    deps = [
+        "@tsl//tsl/platform:logging",
+        "@tsl//tsl/platform:macros",
+        "@tsl//tsl/platform:stacktrace",
+        "@tsl//tsl/platform:status",
+        "@tsl//tsl/platform:statusor",
+    ],
+)
+
+cc_library(
+    name = "tensor_source",
+    hdrs = ["tensor_source.hpp"],
+    deps = [
+        ":debug_macros",
+        "@xla//xla:literal",
+        "@xla//xla:shape_util",
+    ],
+)
+
+cc_library(
+    name = "sys_util",
+    srcs = ["sys_util.cpp"],
+    hdrs = ["sys_util.hpp"],
+    deps = [
+        ":debug_macros",
+        "@com_google_absl//absl/strings",
+        "@xla//xla:types",
+    ],
+)
+
+cc_library(
+    name = "xla_util",
+    srcs = ["xla_util.cpp"],
+    hdrs = ["xla_util.hpp"],
+    deps = [
+        ":debug_macros",
+        # ":metrics",
+        ":sys_util",
+        "//xla_launcher:hash",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:errors",
+        "@xla//xla:shape_util",
+        "@xla//xla:status_macros",
+        "@xla//xla:types",
+        "@xla//xla/hlo/builder:xla_computation",
+        "@xla//xla/service:hlo_proto_cc",
+        "@xla//xla/service:platform_util",
+        # XLA Proto related
+        "@xla//xla:autotune_results_proto_cc_impl",
+        "@xla//xla:autotuning_proto_cc_impl",
+        "@xla//xla:xla_data_proto_cc_impl",
+        "@xla//xla:xla_proto_cc_impl",
+        "@xla//xla/service:buffer_assignment_proto_cc_impl",
+        "@xla//xla/service:hlo_proto_cc_impl",
+        "@xla//xla/service:metrics_proto_cc_impl",
+        "@xla//xla/service/gpu:backend_configs_cc_impl",
+        "@xla//xla/service/gpu/model:hlo_op_profile_proto_cc_impl",
+        "@xla//xla/service/memory_space_assignment:memory_space_assignment_proto_cc_impl",
+        "@xla//xla/stream_executor:device_description_proto_cc_impl",
+        "@xla//xla/stream_executor:stream_executor_impl",
+        "@xla//xla/stream_executor/cuda:cuda_compute_capability_proto_cc_impl",
+        "@xla//xla/backends/cpu/runtime:thunk_proto_cc_impl",
+        # (Tensor Standard Library)TSL Proto related
+        "@xla//xla/tsl/framework:allocator_registry_impl",
+        "@xla//xla/tsl/framework:allocator",
+        "@xla//xla/tsl/platform:env_impl",
+        "@xla//xla/tsl/profiler/backends/cpu:annotation_stack_impl",
+        "@xla//xla/tsl/profiler/backends/cpu:traceme_recorder_impl",
+        "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc_impl",
+        "@tsl//tsl/profiler/protobuf:xplane_proto_cc_impl",
+        "@xla//xla/tsl/profiler/utils:time_utils_impl",
+        "@xla//xla/tsl/protobuf:protos_all_cc_impl",
+    ],
+)
+
+cc_library(
+    name = "stablehlo_composite_helper",
+    srcs = ["stablehlo_composite_helper.cpp"],
+    hdrs = ["stablehlo_composite_helper.hpp"],
+    deps = [
+        ":xla_util",
+        "@jsoncpp_git//:jsoncpp",
+        "@xla//xla/mlir_hlo:all_passes",
+    ],
+)
+
+cc_library(
+    name = "xla_mlir_debuginfo_helper",
+    srcs = ["xla_mlir_debuginfo_helper.cpp"],
+    hdrs = ["xla_mlir_debuginfo_helper.hpp"],
+    deps = [
+        ":xla_util",
+        "@xla//xla/mlir_hlo:all_passes",
+    ],
+)
+
+cc_library(
+    name = "stablehlo_helper",
+    srcs = ["stablehlo_helper.cpp"],
+    hdrs = ["stablehlo_helper.hpp"],
+    deps = [
+        ":debug_macros",
+        ":mlir_pass_helper",
+        ":stablehlo_composite_helper",
+        ":sys_util",
+        ":xla_mlir_debuginfo_helper",
+        ":xla_util",
+        "//xla_launcher:mlir_transform_type",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllExtensions",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:register",
+        "@stablehlo//:stablehlo_portable_api",
+        "@stablehlo//:stablehlo_serialization",
+        "@xla//xla/hlo/translate:stablehlo",
+        "@xla//xla/hlo/translate/hlo_to_mhlo:hlo_to_mlir_hlo",
+        "@xla//xla/hlo/translate/mhlo_to_hlo:mlir_hlo_to_hlo",
+        "@xla//xla/mlir_hlo:all_passes",
+        "@xla//xla/mlir_hlo:hlo_dialect_registration",
+        "@xla//xla/mlir_hlo:stablehlo_extension_passes",
+        "@xla//xla/mlir_hlo:transforms_gpu_passes",
+    ],
+)
+
+cc_library(
+    name = "mlir_pass_helper",
+    srcs = ["mlir_pass_helper.cpp"],
+    hdrs = ["mlir_pass_helper.hpp"],
+    deps = [
+        "//xla_launcher:mlir_transform_type",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllExtensions",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@stablehlo//:stablehlo_ops",
+    ],
+)
+
+strict_cc_test(
+    name = "mlir_pass_helper_test",
+    timeout = "short",
+    srcs = ["mlir_pass_helper_test.cpp"],
+    deps = [
+        ":mlir_pass_helper",
+        "@com_google_googletest//:gtest_main",
+        "@llvm-project//mlir:Parser",
+    ],
+)
+
+cc_library(
+    name = "computation_cache",
+    hdrs = ["computation_cache.hpp"],
+    deps = [
+        ":xla_util",
+    ],
+)
+
+strict_cc_test(
+    name = "computation_cache_test",
+    timeout = "short",
+    srcs = ["computation_cache_test.cpp"],
+    deps = [
+        ":computation_cache",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

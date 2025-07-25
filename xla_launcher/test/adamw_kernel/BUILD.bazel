@@ -1,0 +1,37 @@
+py_binary(
+    name = "generate_adamw_stablehlo_bin",
+    srcs = ["generate_adamw_stablehlo_bin.py"],
+    python_version = "PY3",
+    deps = [
+        "@pypi//absl_py",
+        "@pypi//flatbuffers",
+        "@pypi//jax",
+        "@pypi//numpy",
+        "@pypi//pyyaml",
+    ],
+)
+
+genrule(
+    name = "generate_adamw_stablehlo_bin_file",
+    outs = [
+        "adamw.mlir",
+        "adamw_signature.yaml",
+        "params.bin",
+        "grads.bin",
+        "m.bin",
+        "v.bin",
+        "step.bin",
+        "lr.bin",
+        "b1.bin",
+        "b2.bin",
+        "eps.bin",
+        "weight_decay.bin",
+        "params_new.bin",
+        "m_new.bin",
+        "v_new.bin",
+        "step_new.bin",
+    ],
+    cmd = "$(location :generate_adamw_stablehlo_bin) $(@D)/",
+    tools = [":generate_adamw_stablehlo_bin"],
+    visibility = ["//visibility:public"],
+)

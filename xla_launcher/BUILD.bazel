@@ -1,0 +1,297 @@
+"""
+Build interface library from XLA for using somewhere else
+"""
+
+load(
+    "@xla//xla/tsl/platform:rules_cc.bzl",
+    "cc_binary",
+    "cc_library",
+    "cc_shared_library",
+)
+load(
+    "@local_config_rocm//rocm:build_defs.bzl",
+    "if_rocm",
+)
+load("@rules_pkg//pkg:mappings.bzl", "pkg_filegroup", "pkg_files")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+# TODO(ddunleavy): some of these should be removed from here and added to
+# specific targets.
+# We actually shouldn't need this anymore post vendoring. If we build without
+# `framework_shared_object` in the bazelrc all of this should be able to go
+# away. The problem is making sure that all these impl deps are `if_static`'d
+# appropriately throughout XLA.
+_XLA_SHARED_OBJECT_SENSITIVE_DEPS = [
+    "@xla//xla:autotune_results_proto_cc_impl",
+    "@xla//xla:autotuning_proto_cc_impl",
+    "@xla//xla:xla_data_proto_cc_impl",
+    "@xla//xla:xla_proto_cc_impl",
+    "@xla//xla/service:buffer_assignment_proto_cc_impl",
+    "@xla//xla/service:hlo_proto_cc_impl",
+    "@xla//xla/service:metrics_proto_cc_impl",
+    "@xla//xla/service/gpu:backend_configs_cc_impl",
+    "@xla//xla/service/gpu/model:hlo_op_profile_proto_cc_impl",
+    "@xla//xla/service/memory_space_assignment:memory_space_assignment_proto_cc_impl",
+    "@xla//xla/stream_executor:device_description_proto_cc_impl",
+    "@xla//xla/stream_executor:stream_executor_impl",
+    "@xla//xla/stream_executor/cuda:cuda_compute_capability_proto_cc_impl",
+    "@xla//xla/stream_executor/gpu:gpu_init_impl",
+    "@xla//xla/backends/cpu/runtime:thunk_proto_cc_impl",
+    "@xla//xla/tsl/framework:allocator_registry_impl",
+    "@xla//xla/tsl/framework:allocator",
+    "@xla//xla/tsl/platform:env_impl",
+    "@xla//xla/tsl/profiler/backends/cpu:annotation_stack_impl",
+    "@xla//xla/tsl/profiler/backends/cpu:traceme_recorder_impl",
+    "@tsl//tsl/profiler/protobuf:profiler_options_proto_cc_impl",
+    "@tsl//tsl/profiler/protobuf:xplane_proto_cc_impl",
+    "@xla//xla/tsl/profiler/utils:time_utils_impl",
+    "@xla//xla/tsl/protobuf:protos_all_cc_impl",
+] + if_rocm([
+    "@xla//xla/tsl/util:determinism",
+])
+
+#############################################################################
+#
+# XLA Launcher
+#
+#############################################################################
+
+cc_shared_library(
+    name = "xla_launcher_shared",
+    additional_linker_inputs = [],
+    shared_lib_name = "libxla_launcher.so",
+    static_deps = [
+        ":xla_launcher_lib",
+    ],
+    user_link_flags = [],
+    deps = [
+        ":xla_launcher_lib",
+    ],
+)
+
+cc_library(
+    name = "xla_launcher",
+    hdrs = [
+        "device.hpp",
+        "hash.hpp",
+        "mlir_transform_type.hpp",
+        "xla_launcher.hpp",
+    ],
+    deps = [
+        ":xla_launcher_lib",
+    ],
+)
+
+cc_library(
+    name = "xla_launcher_lib",
+    srcs = ["xla_launcher.cpp"],
+    hdrs = ["xla_launcher.hpp"],
+    deps = [
+        ":dlpack_converter",
+        ":mlir_transform_type",
+        ":xla_graph_executor",
+        "//xla_launcher/runtime:stablehlo_helper",
+    ],
+)
+
+cc_library(
+    name = "xla_graph_executor",
+    srcs = ["xla_graph_executor.cpp"],
+    hdrs = ["xla_graph_executor.hpp"],
+    deps = [
+        ":device",
+        ":hash",
+        ":tensor_helpers",
+        "//xla_launcher/runtime",
+        "//xla_launcher/runtime:computation_cache",
+        "//xla_launcher/runtime:computation_client",
+    ] + _XLA_SHARED_OBJECT_SENSITIVE_DEPS,
+)
+
+cc_library(
+    name = "device",
+    srcs = ["device.cpp"],
+    hdrs = ["device.hpp"],
+    deps = [
+        "//xla_launcher/runtime:debug_macros",
+        "@xla//xla/pjrt:pjrt_compiler",
+    ],
+)
+
+cc_library(
+    name = "hash",
+    srcs = ["hash.cpp"],
+    hdrs = ["hash.hpp"],
+)
+
+cc_library(
+    name = "tensor_helpers",
+    srcs = [
+        "xla_build_helper.cpp",
+        "xla_convert_ops.cpp",
+        "xla_shape_helper.cpp",
+    ],
+    hdrs = [
+        "xla_build_helper.hpp",
+        "xla_convert_ops.hpp",
+        "xla_shape_helper.hpp",
+    ],
+    deps = [
+        ":device",
+        "//xla_launcher/runtime:debug_macros",
+        "//xla_launcher/runtime:sys_util",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:tensor_float_32_utils",
+        "@tsl//tsl/profiler/lib:traceme",
+        "@tsl//tsl/profiler/lib:traceme_encode",
+        "@xla//xla:comparison_util",
+        "@xla//xla:literal_util",
+        "@xla//xla:permutation_util",
+        "@xla//xla:shape_util",
+        "@xla//xla:types",
+        "@xla//xla/hlo/builder:xla_builder",
+        "@xla//xla/hlo/builder/lib:arithmetic",
+        "@xla//xla/hlo/builder/lib:comparators",
+        "@xla//xla/hlo/builder/lib:constants",
+        "@xla//xla/hlo/builder/lib:logdet",
+        "@xla//xla/hlo/builder/lib:math",
+        "@xla//xla/hlo/builder/lib:matrix",
+        "@xla//xla/hlo/builder/lib:pooling",
+        "@xla//xla/hlo/builder/lib:self_adjoint_eig",
+        "@xla//xla/hlo/builder/lib:slicing",
+        "@xla//xla/hlo/builder/lib:sorting",
+        "@xla//xla/hlo/builder/lib:svd",
+        "@xla//xla/hlo/pass:hlo_pass_pipeline",
+        "@xla//xla/stream_executor:dnn",
+    ],
+)
+
+cc_library(
+    name = "dlpack_converter",
+    srcs = ["dlpack_converter.cpp"],
+    hdrs = ["dlpack_converter.hpp"],
+    deps = [
+        "//xla_launcher/runtime",
+        "//xla_launcher/runtime:computation_client",
+        "//xla_launcher/runtime:pjrt_computation_client",
+        "@dlpack_latest//:dlpack",
+    ],
+)
+
+cc_library(
+    name = "mlir_transform_type",
+    hdrs = ["mlir_transform_type.hpp"],
+)
+
+pkg_files(
+    name = "xla_launcher_packaged_headers",
+    srcs = [
+        "device.hpp",
+        "hash.hpp",
+        "mlir_transform_type.hpp",
+        "xla_launcher.hpp",
+    ],
+    prefix = "include/xla_launcher",
+)
+
+pkg_files(
+    name = "xla_launcher_packaged_lib",
+    srcs = [":xla_launcher_shared"],
+    prefix = "lib",
+)
+
+pkg_filegroup(
+    name = "xla_launcher_package",
+    srcs = [
+        ":xla_launcher_packaged_headers",
+        ":xla_launcher_packaged_lib",
+    ],
+)
+
+pkg_tar(
+    name = "xla_launcher_tar_gz",
+    srcs = [
+        ":xla_launcher_package",
+    ],
+    extension = "tar.gz",
+)
+
+pkg_tar(
+    name = "xla_launcher_tar_xz",
+    srcs = [
+        ":xla_launcher_package",
+    ],
+    extension = "tar.xz",
+)
+
+#############################################################################
+#
+# XLA Convertion Tools
+# Include: mlir-hlo-opt -> xla-translate -> xla-translate-opt
+#
+#############################################################################
+
+cc_binary(
+    name = "mlir-hlo-opt",
+    srcs = ["mlir_hlo_opt.cpp"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllExtensions",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:MlirOptLib",
+        "@llvm-project//mlir:Pass",
+        "@llvm-project//mlir:Support",
+        "@shardy//shardy/dialect/sdy/ir:dialect",
+        "@stablehlo//:register",
+        "@xla//xla/mlir_hlo:all_passes",
+        "@xla//xla/mlir_hlo:hlo_dialect_registration",
+        "@xla//xla/mlir_hlo:stablehlo_extension_passes",
+        "@xla//xla/mlir_hlo:transforms_gpu_passes",
+    ],
+)
+
+cc_binary(
+    name = "xla-translate",
+    testonly = True,
+    srcs = ["xla_translate_main.cpp"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+        "@llvm-project//mlir:Support",
+        "@llvm-project//mlir:TranslateLib",
+        "@tsl//tsl/platform:platform_port",
+        "@xla//xla/hlo/translate/hlo_to_mhlo:translate_registration",
+        "@xla//xla/hlo/translate/mhlo_to_hlo:translate_registration",
+        "@xla//xla/hlo/translate/stablehlo_to_hlo:translate_registration",
+        "@xla//xla/service/cpu:cpu_compiler",
+        "@xla//xla/service/cpu:cpu_transfer_manager",
+        "@xla//xla/stream_executor/host:host_platform",
+    ] + _XLA_SHARED_OBJECT_SENSITIVE_DEPS,
+)
+
+cc_binary(
+    name = "xla-translate-opt",
+    testonly = True,
+    srcs = ["xla_translate_opt_main.cpp"],
+    deps = [
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:AllPassesAndDialects",
+        "@llvm-project//mlir:MlirOptLib",
+        "@stablehlo//:register",
+        "@tsl//tsl/platform:platform_port",
+        "@xla//xla/mlir/framework/ir:xla_framework",
+        "@xla//xla/mlir/framework/transforms:passes",
+        "@xla//xla/mlir_hlo:hlo_dialect_registration",
+        "@xla//xla/service:cpu_plugin",
+    ] + _XLA_SHARED_OBJECT_SENSITIVE_DEPS,
+)
+
+sh_binary(
+    name = "format",
+    srcs = ["format.sh"],
+)
